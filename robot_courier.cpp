@@ -1,6 +1,7 @@
 #include <algorithm>
-#include <cmath>
 #include <fstream>
+#include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <queue>
@@ -65,18 +66,83 @@ struct Coordinate {
     }
 };
 
+class Delivery {
+public:
+    Delivery(Coordinate from, Coordinate to) :
+        _start(from), _target(to) {}
+    const Coordinate from() {return _start;}
+    const Coordinate to() {return _target;}
+    const int age() {return _age;}
+    void refresh(int seconds) {_age += seconds;}
+private:
+    Coordinate _start;
+    Coordinate _target;
+    int _age = 0;
+};
+
+using DeliveryList = std::vector<Delivery>;
+
 class Rover {
 public:
-    enum class States {
+    enum class State {
         st_idle,
         st_pickup,
         st_delivery,
     };
-    Rover() = default;
+    enum class Motion {
+        up,
+        down,
+        left,
+        right,
+        stay
+    };
+    Rover(const CityMap& map, DeliveryList& tasks) :
+        _map(map), _tasks(tasks) {
+        int map_size = static_cast<int>(_map.size());
+        bool coordinates_valid = _position.valid(map_size);
+        bool valid_place = false;
+        if (coordinates_valid)
+            valid_place = _map[_position.y][_position.x] != Obstacle;
+        while (!coordinates_valid || !valid_place) {
+            _position.x = std::rand() % map_size;
+            _position.y = std::rand() % map_size;
+        }
+    }
+    void takeOrder(int id) {
+        _delivery_id = id;
+        auto& task = _tasks[_delivery_id];
+        _route = findShortestPath(_map, _position, task.from());
+        _state = State::st_pickup;
+    }
+    const Coordinate getLocation() {return _position;}
+    Motion move() {
+        switch (_state)
+        {
+        case State::st_idle:
+            return Motion::stay;
+        case State::st_pickup:
+
+            break;
+        case State::st_delivery:
+            break;
+        default:
+            break;
+        }       
+    }
+    std::vector<Motion> go(int seconds) {
+        std::vector<Motion> out;
+        for (int i = 0; i < seconds; i++)
+            out.push_back(move());
+        return out;
+    }
+
 private:
     Coordinate _position;
-    Coordinate _delivery_start;
-    Coordinate _delivery_target;
+    std::vector<Coordinate> _route;
+    int _delivery_id = -1;
+    State _state = State::st_idle;
+    const CityMap _map;
+    DeliveryList& _tasks;
 };
 
 std::vector<Coordinate> findShortestPath(const CityMap& map, const Coordinate start, const Coordinate target) {
