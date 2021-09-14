@@ -4,6 +4,7 @@
 #include <iostream>
 #include <list>
 #include <memory>
+#include <stdlib.h>
 #include <queue>
 #include <random>
 #include <utility>
@@ -42,8 +43,11 @@ private:
 #define LOG_DURATION(message) \
   LogDuration UNIQ_ID(__LINE__){message};
 
-int randInt(int min, int max) {
-    return min + std::rand() % (max - min);
+int randInt(int minValue, int maxValue) {
+    std::random_device r;
+    std::default_random_engine e1(r());
+    std::uniform_int_distribution<int> uniform_dist(minValue, maxValue);
+    return uniform_dist(e1);
 }
 
 using CityMap = vector<string>;
@@ -358,8 +362,19 @@ public:
 private:
     int findOptimalRoversCnt() {
         int maxRoverCnt = std::min(100., std::round(1. * _pars->D * _pars->MaxTips / _pars->Cost));
-        int averageSimOrdersCnt = std::round(_pars->D / _pars->T);
-        return std::min(maxRoverCnt, std::max(1, averageSimOrdersCnt));
+        int freeSpaceArea = 0;
+        for (const auto& line : _pars->map) {
+            freeSpaceArea += std::count_if(line.begin(), line.end(), [] (const char& c) {return c == PositionFree;});
+        }
+        int minRoverCnt = std::max(1., freeSpaceArea / (std::pow(0.5 * _pars->MaxTips, 2) + 1e-6));
+        if (minRoverCnt > maxRoverCnt) {
+            if (maxRoverCnt > 1)
+                return randInt(1, maxRoverCnt);
+            else
+                return 1;
+        } else {
+            return randInt(minRoverCnt, maxRoverCnt);
+        }
     }
     void generateRovers() {
         int roversCnt = findOptimalRoversCnt();
