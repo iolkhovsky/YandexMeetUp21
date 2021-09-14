@@ -254,7 +254,7 @@ public:
         int currentDistance = distMap[_position.y][_position.x];
         for (const auto& move: neighbors) {
             const auto& neighbor = move.first;
-            if (neighbor.valid(mapSize) && (distMap[neighbor.y][neighbor.x] != -1)) {
+            if (neighbor.valid(mapSize) && (distMap[neighbor.y][neighbor.x] >= 0)) {
                 if (distMap[neighbor.y][neighbor.x] < currentDistance) {
                     return move.second;
                 }
