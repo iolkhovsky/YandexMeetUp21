@@ -217,18 +217,26 @@ using DistanceMap = vector<vector<int>>;
 class Delivery {
 public:
     Delivery(Position from, Position to, const CityMap& map) :
-        _start(from), _target(to) {
-        _distToStart = make_unique<DistanceMap>();
-        _distToDestination = make_unique<DistanceMap>();
-        *_distToStart = computeDistanceMap(map, from);
-        *_distToDestination = computeDistanceMap(map, to);
+        _start(from), _target(to), _map(map) {
     }
     Position getStart() const {return _start;}
     Position getDestination() const {return _target;}
     int getAge() const {return _age;}
     void refreshAge(int seconds = 1) {_age += seconds;}
-    const DistanceMap& getDistMapToStart() const {return *_distToStart;}
-    const DistanceMap& getDistMapToDestination() const {return *_distToDestination;}
+    const DistanceMap& getDistMapToStart() {
+        if (!_distToStart) {
+            _distToStart = make_unique<DistanceMap>();
+            *_distToStart = computeDistanceMap(_map, _start);
+        }
+        return *_distToStart;       
+    }
+    const DistanceMap& getDistMapToDestination() {
+        if (!_distToDestination) {
+            _distToDestination = make_unique<DistanceMap>();
+            *_distToDestination = computeDistanceMap(_map, _target);
+        }
+        return *_distToDestination;  
+    }
     void eraseDistanceMaps() {
         _distToStart = nullptr;
         _distToDestination = nullptr;
@@ -236,6 +244,7 @@ public:
 private:
     Position _start;
     Position _target;
+    const CityMap& _map;
     int _age = 0;
     unique_ptr<DistanceMap> _distToStart;
     unique_ptr<DistanceMap> _distToDestination;
