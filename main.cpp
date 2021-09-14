@@ -10,6 +10,37 @@
 
 using namespace std;
 
+#include <chrono>
+#include <map>
+
+using namespace std::chrono;
+
+class LogDuration {
+public:
+  explicit LogDuration(const string& msg = "")
+    : message(msg + ": ")
+    , start(steady_clock::now())
+  {
+  }
+
+  ~LogDuration() {
+    auto finish = steady_clock::now();
+    auto dur = finish - start;
+    cerr << message
+       << duration_cast<milliseconds>(dur).count()
+       << " ms" << endl;
+  }
+private:
+  string message;
+  steady_clock::time_point start;
+};
+
+#define UNIQ_ID_IMPL(lineno) _a_local_var_##lineno
+#define UNIQ_ID(lineno) UNIQ_ID_IMPL(lineno)
+
+#define LOG_DURATION(message) \
+  LogDuration UNIQ_ID(__LINE__){message};
+
 int randInt(int min, int max) {
     return min + std::rand() % (max - min);
 }
@@ -250,16 +281,9 @@ public:
     }    
 private:
     int findOptimalRoversCnt() {
-        return 1;
         int maxRoverCnt = std::min(100., std::round(1. * _pars->D * _pars->MaxTips / _pars->Cost));
-        int minRoverCnt = std::max(1., std::round(2. * _pars->N / _pars->MaxTips));
-        if (maxRoverCnt > minRoverCnt) {
-            return randInt(minRoverCnt, maxRoverCnt);
-        } else if (maxRoverCnt > 1) {
-            return randInt(1, maxRoverCnt);
-        } else {
-            return 1;
-        }
+        int averageSimOrdersCnt = std::round(_pars->D / _pars->T);
+        return std::min(maxRoverCnt, std::max(1, averageSimOrdersCnt));
     }
     void generateRovers() {
         int roversCnt = findOptimalRoversCnt();
@@ -272,6 +296,7 @@ private:
         _os.flush();
     }
     list<Delivery>::iterator findBestOrder(const Rover& rover) {
+        LOG_DURATION("RoversController::findBestOrder");
         int maxTips = _pars->MaxTips;
         return std::max_element(_orders.begin(), _orders.end(), 
             [&rover, maxTips] (const Delivery& lhs, const Delivery& rhs) {
@@ -280,6 +305,7 @@ private:
     }
     void run() {
         for (int iterId = 0; iterId < _pars->T; iterId++) {
+            LOG_DURATION("RoversController::run()");
             // update orders
             int k; _is >> k;
             for (int orderId = 0; orderId < k; orderId++) {
@@ -308,6 +334,7 @@ private:
                 _os << rover.getActions() << "\n";
                 rover.resetActions();
             }
+            _os.flush();
         }
     }
 
