@@ -9,6 +9,7 @@
 #include <queue>
 #include <random>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -241,13 +242,13 @@ private:
 };
 
 using DeliveryPtr = shared_ptr<Delivery>;
-using OrdersStorage = std::list<DeliveryPtr>;
-using DeliveryId = OrdersStorage::iterator;
+using OrdersStorage = std::unordered_map<Position, deque<DeliveryPtr>, PositionHasher>;
+//using DeliveryId = OrdersStorage::iterator;
 
 class Rover {
 public:   
-    Rover(const CityMap& map) 
-        : _map(map) {
+    Rover(const CityMap& map, OrdersStorage& orders, unordered_set<DeliveryPtr>& ordersInProgress) 
+        : _map(map), _orders(orders), _ordersInProgress(ordersInProgress) {
         int mapSize = static_cast<int>(_map.size());
         bool freePlace = false;
         while (!freePlace) {
@@ -336,6 +337,10 @@ public:
             _actions.push_back(action2symbol(_schedule.front()));
             go(_schedule.front());
             _schedule.pop();
+            if (_schedule.empty()) {
+                _ordersInProgress.erase(_order);
+                _orders[_order->getStart()].pop_front();
+            }
         }
     }
     const string& getActions() const {
@@ -359,6 +364,9 @@ private:
     string _actions;
     DeliveryPtr _order;
     std::queue<RoverMotion> _schedule;
+
+    OrdersStorage& _orders;
+    unordered_set<DeliveryPtr>& _ordersInProgress;
 };
 
 class RoversController {
@@ -390,23 +398,28 @@ private:
         int roversCnt = findOptimalRoversCnt();
         _rovers.reserve(roversCnt);
         for (int i = 0; i < roversCnt; i++)
-            _rovers.emplace_back(Rover(_pars->map));
+            _rovers.emplace_back(Rover(_pars->map, _orders, _ordersInProgress));
         _os << _rovers.size() << "\n";
         for (const auto& rover: _rovers)
             _os << rover.getLocation() << "\n"; 
         _os.flush();
     }
-    DeliveryId findBestOrder(const Rover& rover) {
+    DeliveryPtr findBestOrder(const Rover& rover) {
         //LOG_DURATION("RoversController::findBestOrder");
         int maxTips = _pars->MaxTips;
-        std::unordered_map<Position, DeliveryPtr, PositionHasher> actualOrders;
+        vector<DeliveryPtr> actualOrders;
         for (auto it = _orders.begin(); it != _orders.end(); it++)
-            actualOrders[(*it)->getStart()] = *it;
+            if (!it->second.empty()) {
+                if (!_ordersInProgress.count(it->second.front()))
+                    actualOrders.push_back(it->second.front());
+            }
+        if (actualOrders.empty())
+            return nullptr;
         auto bestOrderIt = std::max_element(actualOrders.begin(), actualOrders.end(), 
             [&rover, maxTips] (const auto& lhs, const auto& rhs) {
-                return rover.reward(lhs.second, maxTips) > rover.reward(rhs.second, maxTips);
+                return rover.reward(lhs, maxTips) > rover.reward(rhs, maxTips);
             });
-        return std::find(_orders.begin(), _orders.end(), bestOrderIt->second);
+        return *bestOrderIt;
     }
     void run() {
         for (int iterId = 0; iterId < _pars->T; iterId++) {
@@ -417,29 +430,25 @@ private:
                 Position orderStart, orderStop;
                 _is >> orderStart >> orderStop;
                 auto order = std::make_shared<Delivery>(orderStart, orderStop, _pars->map);
-                _orders.push_front(std::move(order));
+                _orders[order->getStart()].push_back(std::move(order));
             }
             // run robots
             for (int second = 0; second < 60; second ++) {
                 for (auto& rover : _rovers) {
                     if (rover.isFree()) {
                         // find new order
-                        DeliveryId bestOrder = findBestOrder(rover);
-                        if (bestOrder != _orders.end()) {
-                            auto delivery = *bestOrder;
-                            rover.setOrder(delivery);
-                            _orders.erase(bestOrder);
+                        DeliveryPtr bestOrder = findBestOrder(rover);
+                        if (bestOrder != nullptr) {
+                            rover.setOrder(bestOrder);
+                            _ordersInProgress.insert(bestOrder);
                         }
                     }
                     rover.makeNextMove();
                 }
-                for (auto it = _orders.begin(); it!=_orders.end();) {
-                    (*it)->refreshAge(1);
-                    it++;
-                    //if ((*it)->getAge() > _pars->MaxTips)
-                    //    it = _orders.erase(it);
-                    //else
-                    //    it++;
+                for (auto& posData: _orders) {
+                    auto& deliveryQueue = posData.second;
+                    for (auto& order: deliveryQueue)
+                        order->refreshAge(1);
                 }
             }
             for (auto& rover : _rovers) {
@@ -456,6 +465,7 @@ private:
 
     vector<Rover> _rovers;
     OrdersStorage _orders;
+    unordered_set<DeliveryPtr> _ordersInProgress;
 };
 
 template<typename T>
