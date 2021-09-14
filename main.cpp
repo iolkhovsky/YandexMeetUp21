@@ -6,6 +6,7 @@
 #include <memory>
 #include <queue>
 #include <random>
+#include <utility>
 #include <vector>
 
 using namespace std;
@@ -75,12 +76,16 @@ istream& operator>>(istream& is, ParametersPtr pars) {
 struct Position {
     int x = -1;
     int y = -1;
-    bool valid(int N) {
+    bool valid(int N) const {
         return x >= 0 && y >= 0 && x < N && y < N;
     }
-    bool operator==(const Position& other) {
+    bool operator==(const Position& other) const {
         return x == other.x && y == other.y;
     }
+    Position getUpNeighbor() const {return {x, y-1};}
+    Position getDownNeighbor() const {return {x, y+1};}
+    Position getLeftNeighbor() const {return {x-1, y};}
+    Position getRightNeighbor() const {return {x+1, y};}
 };
 
 istream& operator>>(istream& is, Position& coord) {
@@ -93,6 +98,36 @@ istream& operator>>(istream& is, Position& coord) {
 ostream& operator<<(ostream& os, const Position& coord) {
     os << coord.y + 1 << " " << coord.x + 1; // abnormal coords [1, N] instead of [0, N-1]
     return os;
+}
+
+vector<vector<int>> computeDistanceMap(const CityMap& map, const Position& target) {
+    int mapSize = static_cast<int>(map.size());
+    vector<vector<int>> out(mapSize);
+    for (auto& line : out)
+        line.resize(mapSize, -2);
+    queue<pair<Position, int>> fifo;
+    fifo.push({target, 0});
+    while (!fifo.empty()) {
+        auto node = fifo.front();
+        fifo.pop();
+        auto& position = node.first;
+        int distance = node.second;
+        out[position.y][position.x] = distance;
+        vector<Position> adjacentVertices = {
+            position.getUpNeighbor(), position.getDownNeighbor(),
+            position.getLeftNeighbor(), position.getRightNeighbor()
+        };
+        for (auto& nextVertex: adjacentVertices) {
+            if (nextVertex.valid(mapSize)) {
+                bool visited = out[nextVertex.y][nextVertex.x] != -2;
+                if ((!visited) && (map[nextVertex.y][nextVertex.x] == PositionFree)) {
+                    fifo.push({nextVertex, distance + 1});
+                    out[nextVertex.y][nextVertex.x] = -1;
+                }
+            }
+        }
+    }
+    return out;
 }
 
 vector<Position> findShortestPath(const CityMap& map, const Position start, const Position target) {
@@ -162,21 +197,32 @@ char action2symbol(RoverMotion motion) {
 //////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////
 
+using DistanceMap = vector<vector<int>>;
+
 class Delivery {
 public:
-    Delivery(Position from, Position to) :
-        _start(from), _target(to) {}
+    Delivery(Position from, Position to, const CityMap& map) :
+        _start(from), _target(to) {
+        _distToStart = computeDistanceMap(map, from);
+        _distToDestination = computeDistanceMap(map, to);
+    }
     Position getStart() const {return _start;}
     Position getDestination() const {return _target;}
     int getAge() const {return _age;}
     void refreshAge(int seconds = 1) {_age += seconds;}
+    const DistanceMap& getDistMapToStart() const {return _distToStart;}
+    const DistanceMap& getDistMapToDestination() const {return _distToDestination;}
 private:
     Position _start;
     Position _target;
     int _age = 0;
+    DistanceMap _distToStart;
+    DistanceMap _distToDestination;
 };
 
-using OrderIt = list<Delivery>::iterator;
+using DeliveryPtr = shared_ptr<Delivery>;
+using OrdersStorage = std::list<DeliveryPtr>;
+using DeliveryId = OrdersStorage::iterator;
 
 class Rover {
 public:   
@@ -193,21 +239,46 @@ public:
     }
     Position getLocation() const {return _position;}
     bool isFree() const {return _state == RoverState::st_idle;}
-    void setOrder(std::shared_ptr<Delivery> order) {
+    void setOrder(DeliveryPtr order) {
         _order = order;
         _state = RoverState::st_goToStart;
-        _route = findShortestPath(_map, _position, _order->getStart());
-        _step = 0;
     }
-    RoverMotion defineMotion(const Position& from, const Position& to) {
-        if (from.x == to.x && from.y == to.y)
-            return RoverMotion::stay;
-        else if (from.x == to.x) {
-            return to.y < from.y ? RoverMotion::up : RoverMotion::down;
-        } else if (from.y == to.y) {
-            return to.x < from.x ? RoverMotion::left : RoverMotion::right;
-        } else {
-            throw runtime_error("defineMotion() got not adjacent points");
+    RoverMotion defineMotion(const DistanceMap& distMap) {
+        int mapSize = static_cast<int>(distMap.size());
+        vector<pair<Position, RoverMotion>> neighbors = {
+            {_position.getUpNeighbor(), RoverMotion::up},
+            {_position.getDownNeighbor(), RoverMotion::down},
+            {_position.getLeftNeighbor(), RoverMotion::left},
+            {_position.getRightNeighbor(), RoverMotion::right}
+        };
+        int currentDistance = distMap[_position.y][_position.x];
+        for (const auto& move: neighbors) {
+            const auto& neighbor = move.first;
+            if (neighbor.valid(mapSize) && (distMap[neighbor.y][neighbor.x] != -1)) {
+                if (distMap[neighbor.y][neighbor.x] < currentDistance) {
+                    return move.second;
+                }
+            }
+        }
+        return RoverMotion::stay;
+    }
+    void go(RoverMotion motion) {
+        switch (motion)
+        {
+        case RoverMotion::down:
+            _position = _position.getDownNeighbor();
+            break;
+        case RoverMotion::up:
+            _position = _position.getUpNeighbor();
+            break;
+        case RoverMotion::left:
+            _position = _position.getLeftNeighbor();
+            break;
+        case RoverMotion::right:
+            _position = _position.getRightNeighbor();
+            break;                    
+        default:
+            break;
         }
     }
     void makeNextMove() {
@@ -220,26 +291,21 @@ public:
                 if (_position == _order->getStart()) {
                     _actions.push_back(action2symbol(RoverMotion::pick));
                     _state = RoverState::st_goToDest;
-                    _route = findShortestPath(_map, _order->getStart(), _order->getDestination());
-                    _step = 0;
                 } else {
-                    RoverMotion nextMotion = defineMotion(_route[_step],_route[_step+1]);
+                    RoverMotion nextMotion = defineMotion(_order->getDistMapToStart());
                     _actions.push_back(action2symbol(nextMotion));
-                    _position = _route[_step+1];
-                    _step++;
+                    go(nextMotion);
                 }
                 break;
             case RoverState::st_goToDest:
                 if (_position == _order->getDestination()) {
                     _actions.push_back(action2symbol(RoverMotion::issue));
                     _state = RoverState::st_idle;
-                    _route.clear();
-                    _step = 0;
+                    _order = nullptr;
                 } else {
-                    RoverMotion nextMotion = defineMotion(_route[_step],_route[_step+1]);
+                    RoverMotion nextMotion = defineMotion(_order->getDistMapToDestination());
                     _actions.push_back(action2symbol(nextMotion));
-                    _position = _route[_step+1];
-                    _step++;
+                    go(nextMotion);
                 }
                 break;
             default:
@@ -254,21 +320,20 @@ public:
         _actions.clear();
         _actions.reserve(60);
     }
-    int reward(const Delivery& order, int maxTips) const {
-        if (order.getAge() >= maxTips)
+    int reward(DeliveryPtr order, int maxTips) const {
+        if (order->getAge() >= maxTips)
             return 0;
-        int pathToStart = findShortestPath(_map, _position, order.getStart()).size();
-        int deliveryPath = findShortestPath(_map, order.getStart(), order.getDestination()).size();
-        return std::max(0, maxTips - (pathToStart + deliveryPath + order.getAge()));
+        const auto& deliveryStart = order->getStart();
+        int pathToStart = order->getDistMapToStart()[_position.y][_position.x];
+        int deliveryPath = order->getDistMapToDestination()[deliveryStart.y][deliveryStart.x];
+        return std::max(0, maxTips - (pathToStart + deliveryPath + order->getAge()));
     }
 private:
     Position _position;
-    vector<Position> _route;
-    int _step;
     RoverState _state = RoverState::st_idle;
     const CityMap& _map;
     string _actions;
-    std::shared_ptr<Delivery> _order;
+    DeliveryPtr _order;
 };
 
 class RoversController {
@@ -295,40 +360,41 @@ private:
             _os << rover.getLocation() << "\n"; 
         _os.flush();
     }
-    list<Delivery>::iterator findBestOrder(const Rover& rover) {
-        LOG_DURATION("RoversController::findBestOrder");
+    DeliveryId findBestOrder(const Rover& rover) {
+        //LOG_DURATION("RoversController::findBestOrder");
         int maxTips = _pars->MaxTips;
         return std::max_element(_orders.begin(), _orders.end(), 
-            [&rover, maxTips] (const Delivery& lhs, const Delivery& rhs) {
+            [&rover, maxTips] (const DeliveryPtr& lhs, const DeliveryPtr& rhs) {
                 return rover.reward(lhs, maxTips) > rover.reward(rhs, maxTips);
             });
     }
     void run() {
         for (int iterId = 0; iterId < _pars->T; iterId++) {
-            LOG_DURATION("RoversController::run()");
+            //LOG_DURATION("RoversController::run()");
             // update orders
             int k; _is >> k;
             for (int orderId = 0; orderId < k; orderId++) {
                 Position orderStart, orderStop;
                 _is >> orderStart >> orderStop;
-                _orders.push_back({orderStart, orderStop});
+                auto order = std::make_shared<Delivery>(orderStart, orderStop, _pars->map);
+                _orders.push_back(std::move(order));
             }
             // run robots
             for (int second = 0; second < 60; second ++) {
                 for (auto& rover : _rovers) {
                     if (rover.isFree()) {
                         // find new order
-                        OrderIt bestOrder = findBestOrder(rover);
+                        DeliveryId bestOrder = findBestOrder(rover);
                         if (bestOrder != _orders.end()) {
-                            auto order = make_shared<Delivery>(*bestOrder);
+                            auto delivery = *bestOrder;
+                            rover.setOrder(delivery);
                             _orders.erase(bestOrder);
-                            rover.setOrder(order);
                         }
                     }
                     rover.makeNextMove();
                 }
                 for (auto& order: _orders)
-                    order.refreshAge(1);
+                    order->refreshAge(1);
             }
             for (auto& rover : _rovers) {
                 _os << rover.getActions() << "\n";
@@ -343,8 +409,18 @@ private:
     ostream& _os;
 
     vector<Rover> _rovers;
-    list<Delivery> _orders;
+    OrdersStorage _orders;
 };
+
+template<typename T>
+ostream& operator<<(ostream& os, const vector<vector<T>>& matrix) {
+    for (const auto& line : matrix) {
+        for (const T& p : line)
+            os << p;
+        os << "\n";
+    }
+    return os;
+}
 
 int main(int argc, char** argv) {
     ParametersPtr pars = make_shared<Parameters>();
@@ -356,5 +432,8 @@ int main(int argc, char** argv) {
          cin >> pars;
          RoversController solution(pars, cin, cout);
     }
+    //auto dist = computeDistanceMap(pars->map, {0, 0});
+    //cout << dist;
+
     return 0;
 }
