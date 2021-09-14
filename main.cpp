@@ -1,12 +1,14 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <list>
 #include <memory>
 #include <stdlib.h>
 #include <queue>
 #include <random>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -90,6 +92,14 @@ struct Position {
     Position getDownNeighbor() const {return {x, y+1};}
     Position getLeftNeighbor() const {return {x-1, y};}
     Position getRightNeighbor() const {return {x+1, y};}
+};
+
+struct PositionHasher {
+    size_t operator()(const Position& pos) const {
+        const int k = 37;
+        return intHasher(pos.x) * k + pos.y;
+    }
+    std::hash<int> intHasher;
 };
 
 istream& operator>>(istream& is, Position& coord) {
@@ -389,10 +399,14 @@ private:
     DeliveryId findBestOrder(const Rover& rover) {
         //LOG_DURATION("RoversController::findBestOrder");
         int maxTips = _pars->MaxTips;
-        return std::max_element(_orders.begin(), _orders.end(), 
-            [&rover, maxTips] (const DeliveryPtr& lhs, const DeliveryPtr& rhs) {
-                return rover.reward(lhs, maxTips) > rover.reward(rhs, maxTips);
+        std::unordered_map<Position, DeliveryPtr, PositionHasher> actualOrders;
+        for (auto it = _orders.begin(); it != _orders.end(); it++)
+            actualOrders[(*it)->getStart()] = *it;
+        auto bestOrderIt = std::max_element(actualOrders.begin(), actualOrders.end(), 
+            [&rover, maxTips] (const auto& lhs, const auto& rhs) {
+                return rover.reward(lhs.second, maxTips) > rover.reward(rhs.second, maxTips);
             });
+        return std::find(_orders.begin(), _orders.end(), bestOrderIt->second);
     }
     void run() {
         for (int iterId = 0; iterId < _pars->T; iterId++) {
@@ -403,7 +417,7 @@ private:
                 Position orderStart, orderStop;
                 _is >> orderStart >> orderStop;
                 auto order = std::make_shared<Delivery>(orderStart, orderStop, _pars->map);
-                _orders.push_back(std::move(order));
+                _orders.push_front(std::move(order));
             }
             // run robots
             for (int second = 0; second < 60; second ++) {
@@ -464,8 +478,5 @@ int main(int argc, char** argv) {
          cin >> pars;
          RoversController solution(pars, cin, cout);
     }
-    //auto dist = computeDistanceMap(pars->map, {0, 0});
-    //cout << dist;
-
     return 0;
 }
