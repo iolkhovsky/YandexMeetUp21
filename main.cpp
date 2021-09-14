@@ -203,21 +203,27 @@ class Delivery {
 public:
     Delivery(Position from, Position to, const CityMap& map) :
         _start(from), _target(to) {
-        _distToStart = computeDistanceMap(map, from);
-        _distToDestination = computeDistanceMap(map, to);
+        _distToStart = make_unique<DistanceMap>();
+        _distToDestination = make_unique<DistanceMap>();
+        *_distToStart = computeDistanceMap(map, from);
+        *_distToDestination = computeDistanceMap(map, to);
     }
     Position getStart() const {return _start;}
     Position getDestination() const {return _target;}
     int getAge() const {return _age;}
     void refreshAge(int seconds = 1) {_age += seconds;}
-    const DistanceMap& getDistMapToStart() const {return _distToStart;}
-    const DistanceMap& getDistMapToDestination() const {return _distToDestination;}
+    const DistanceMap& getDistMapToStart() const {return *_distToStart;}
+    const DistanceMap& getDistMapToDestination() const {return *_distToDestination;}
+    void eraseDistanceMaps() {
+        _distToStart = nullptr;
+        _distToDestination = nullptr;
+    }
 private:
     Position _start;
     Position _target;
     int _age = 0;
-    DistanceMap _distToStart;
-    DistanceMap _distToDestination;
+    unique_ptr<DistanceMap> _distToStart;
+    unique_ptr<DistanceMap> _distToDestination;
 };
 
 using DeliveryPtr = shared_ptr<Delivery>;
@@ -238,30 +244,58 @@ public:
         _actions.reserve(60);
     }
     Position getLocation() const {return _position;}
-    bool isFree() const {return _state == RoverState::st_idle;}
+    bool isFree() const {return _schedule.empty();}
     void setOrder(DeliveryPtr order) {
         _order = order;
-        _state = RoverState::st_goToStart;
+        scheduleTrek(_order);
+        _order->eraseDistanceMaps();
     }
-    RoverMotion defineMotion(const DistanceMap& distMap) {
-        int mapSize = static_cast<int>(distMap.size());
-        vector<pair<Position, RoverMotion>> neighbors = {
-            {_position.getUpNeighbor(), RoverMotion::up},
-            {_position.getDownNeighbor(), RoverMotion::down},
-            {_position.getLeftNeighbor(), RoverMotion::left},
-            {_position.getRightNeighbor(), RoverMotion::right}
-        };
-        int currentDistance = distMap[_position.y][_position.x];
-        for (const auto& move: neighbors) {
-            const auto& neighbor = move.first;
-            if (neighbor.valid(mapSize) && (distMap[neighbor.y][neighbor.x] >= 0)) {
-                if (distMap[neighbor.y][neighbor.x] < currentDistance) {
-                    return move.second;
+    void scheduleTrek(DeliveryPtr order) {
+        int mapSize = static_cast<int>(order->getDistMapToStart().size());
+        Position virtualRover = _position;
+        const DistanceMap& distMapToStart = order->getDistMapToStart();
+        const DistanceMap& distMapToDest = order->getDistMapToDestination();
+        while (!(virtualRover == order->getStart())) {
+            vector<pair<Position, RoverMotion>> options = {
+                {virtualRover.getUpNeighbor(), RoverMotion::up},
+                {virtualRover.getDownNeighbor(), RoverMotion::down},
+                {virtualRover.getLeftNeighbor(), RoverMotion::left},
+                {virtualRover.getRightNeighbor(), RoverMotion::right}
+            };
+            int currentDistance = distMapToStart[virtualRover.y][virtualRover.x];
+            for (const auto& option: options) {
+                const auto& neighbor = option.first;
+                if (neighbor.valid(mapSize) && (distMapToStart[neighbor.y][neighbor.x] >= 0)) {
+                    if (distMapToStart[neighbor.y][neighbor.x] < currentDistance) {
+                        _schedule.push(option.second);
+                        virtualRover = neighbor;
+                        break;
+                    }
                 }
             }
         }
-        return RoverMotion::stay;
-    }
+        _schedule.push(RoverMotion::pick);
+        while (!(virtualRover == order->getDestination())) {
+            vector<pair<Position, RoverMotion>> options = {
+                {virtualRover.getUpNeighbor(), RoverMotion::up},
+                {virtualRover.getDownNeighbor(), RoverMotion::down},
+                {virtualRover.getLeftNeighbor(), RoverMotion::left},
+                {virtualRover.getRightNeighbor(), RoverMotion::right}
+            };
+            int currentDistance = distMapToDest[virtualRover.y][virtualRover.x];
+            for (const auto& option: options) {
+                const auto& neighbor = option.first;
+                if (neighbor.valid(mapSize) && (distMapToDest[neighbor.y][neighbor.x] >= 0)) {
+                    if (distMapToDest[neighbor.y][neighbor.x] < currentDistance) {
+                        _schedule.push(option.second);
+                        virtualRover = neighbor;
+                        break;
+                    }
+                }
+            }
+        }
+        _schedule.push(RoverMotion::issue);
+    } 
     void go(RoverMotion motion) {
         switch (motion)
         {
@@ -282,35 +316,12 @@ public:
         }
     }
     void makeNextMove() {
-        switch (_state)
-        {
-            case RoverState::st_idle:
-                _actions.push_back(action2symbol(RoverMotion::stay));
-                break;
-            case RoverState::st_goToStart:
-                if (_position == _order->getStart()) {
-                    _actions.push_back(action2symbol(RoverMotion::pick));
-                    _state = RoverState::st_goToDest;
-                } else {
-                    RoverMotion nextMotion = defineMotion(_order->getDistMapToStart());
-                    _actions.push_back(action2symbol(nextMotion));
-                    go(nextMotion);
-                }
-                break;
-            case RoverState::st_goToDest:
-                if (_position == _order->getDestination()) {
-                    _actions.push_back(action2symbol(RoverMotion::issue));
-                    _state = RoverState::st_idle;
-                    _order = nullptr;
-                } else {
-                    RoverMotion nextMotion = defineMotion(_order->getDistMapToDestination());
-                    _actions.push_back(action2symbol(nextMotion));
-                    go(nextMotion);
-                }
-                break;
-            default:
-                throw runtime_error("Unexpected rover state in Rover::makeNextMove()");
-                break;
+        if (_schedule.empty())
+            _actions.push_back(action2symbol(RoverMotion::stay));
+        else {
+            _actions.push_back(action2symbol(_schedule.front()));
+            go(_schedule.front());
+            _schedule.pop();
         }
     }
     const string& getActions() const {
@@ -330,10 +341,10 @@ public:
     }
 private:
     Position _position;
-    RoverState _state = RoverState::st_idle;
     const CityMap& _map;
     string _actions;
     DeliveryPtr _order;
+    std::queue<RoverMotion> _schedule;
 };
 
 class RoversController {
@@ -393,8 +404,14 @@ private:
                     }
                     rover.makeNextMove();
                 }
-                for (auto& order: _orders)
-                    order->refreshAge(1);
+                for (auto it = _orders.begin(); it!=_orders.end();) {
+                    (*it)->refreshAge(1);
+                    it++;
+                    //if ((*it)->getAge() > _pars->MaxTips)
+                    //    it = _orders.erase(it);
+                    //else
+                    //    it++;
+                }
             }
             for (auto& rover : _rovers) {
                 _os << rover.getActions() << "\n";
